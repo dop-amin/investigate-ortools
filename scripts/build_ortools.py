@@ -19,6 +19,7 @@ PYBIND11_PROTOBUF_TAG = os.environ.get(
 )
 SLOTHY_RUNTIME_DEPS = ["sympy==1.14.0", "unicorn==2.1.4"]
 PYTHON_DEP_CONSTRAINTS = ["protobuf<=6.31.1"]
+ORTOOLS_PYTHON_BUILD_DEPS = ["mypy-protobuf"]
 
 
 def run(cmd, cwd=None, check=True):
@@ -75,6 +76,7 @@ def build(commit: str, jobs: int):
     """Checkout *commit*, build the Python wheel, install into a venv, return python path."""
     RESULTS_DIR.mkdir(exist_ok=True)
     commit_name = _safe_name(commit)
+    venv_dir = RESULTS_DIR / f"venv-{commit_name}"
 
     # Use a completely isolated build directory per commit so there is zero
     # chance of stale FetchContent caches or patch artifacts from a previous
@@ -88,6 +90,17 @@ def build(commit: str, jobs: int):
     if legacy_build.exists():
         print(f"  Cleaning legacy build dir: {legacy_build}")
         shutil.rmtree(legacy_build)
+
+    # Create the venv before configuring CMake so OR-Tools' Python module
+    # probes run against a mutable interpreter instead of Nix's managed Python.
+    if venv_dir.exists():
+        shutil.rmtree(venv_dir)
+    run([sys.executable, "-m", "venv", str(venv_dir)])
+
+    venv_python = venv_dir / "bin" / "python"
+    venv_pip = venv_dir / "bin" / "pip"
+    run([str(venv_python), "-m", "pip", "install", "--upgrade", "pip"])
+    run([str(venv_pip), "install", *ORTOOLS_PYTHON_BUILD_DEPS])
 
     # 1. checkout commit (force to discard any local changes from prior builds)
     run(["git", "checkout", "-f", commit], cwd=OR_TOOLS_DIR)
@@ -104,6 +117,8 @@ def build(commit: str, jobs: int):
         "-DBUILD_PYTHON=ON",
         "-DCMAKE_BUILD_TYPE=Release",
         "-DBUILD_DEPS=ON",
+        "-DFETCH_PYTHON_DEPS=OFF",
+        f"-DPython3_EXECUTABLE={venv_python}",
     ])
 
     # 3. build the python_package target
@@ -122,23 +137,14 @@ def build(commit: str, jobs: int):
     wheel = wheel_candidates[0]
     print(f"Found wheel: {wheel}")
 
-    # 5. create a fresh venv for this commit
-    venv_dir = RESULTS_DIR / f"venv-{commit_name}"
-    if venv_dir.exists():
-        shutil.rmtree(venv_dir)
-    run([sys.executable, "-m", "venv", str(venv_dir)])
-
-    venv_python = venv_dir / "bin" / "python"
-    venv_pip = venv_dir / "bin" / "pip"
-
-    # 6. install wheel + SLOTHY in editable mode.  SLOTHY's metadata pins an
+    # 5. install wheel + SLOTHY in editable mode.  SLOTHY's metadata pins an
     # or-tools release from PyPI, so install it with --no-deps to preserve the
     # wheel built from the commit under test.
     run([str(venv_pip), "install", str(wheel), *PYTHON_DEP_CONSTRAINTS])
     run([str(venv_pip), "install", *SLOTHY_RUNTIME_DEPS])
     run([str(venv_pip), "install", "--no-deps", "-e", str(SLOTHY_DIR)])
 
-    # 7. free disk space by removing the C++ build tree
+    # 6. free disk space by removing the C++ build tree
     shutil.rmtree(build_dir)
 
     print(f"\nBuild complete. Venv: {venv_dir}")
