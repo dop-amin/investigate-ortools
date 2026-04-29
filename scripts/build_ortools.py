@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 REPO_ROOT = Path(__file__).parent.parent.resolve()
 OR_TOOLS_DIR = REPO_ROOT / "or-tools"
@@ -19,13 +20,45 @@ PYBIND11_PROTOBUF_TAG = os.environ.get(
 )
 SLOTHY_RUNTIME_DEPS = ["sympy==1.14.0", "unicorn==2.1.4"]
 PYTHON_DEP_CONSTRAINTS = ["protobuf<=6.31.1"]
-ORTOOLS_PYTHON_BUILD_DEPS = ["mypy-protobuf"]
+ORTOOLS_PYTHON_BUILD_DEPS = [
+    "pip==23.1.2",
+    "setuptools==67.7.2",
+    "wheel==0.40.0",
+    "mypy-protobuf>=3.4,<4",
+    "protobuf>=4.23.3,<5",
+]
 
 
-def run(cmd, cwd=None, check=True):
+def _tail(path: Path, lines: int = 80) -> str:
+    """Return the last *lines* lines from a text file."""
+    try:
+        content = path.read_text(errors="replace").splitlines()
+    except FileNotFoundError:
+        return ""
+    return "\n".join(content[-lines:])
+
+
+def run(cmd, cwd=None, check=True, log_path: Optional[Path] = None):
     """Run a shell command, echoing it first."""
     print(f"  > {' '.join(str(c) for c in cmd)}", flush=True)
-    return subprocess.run(cmd, cwd=cwd, check=check, capture_output=False)
+    if log_path is None:
+        return subprocess.run(cmd, cwd=cwd, check=check, capture_output=False)
+
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("w", encoding="utf-8") as log:
+        log.write(f"$ {' '.join(str(c) for c in cmd)}\n\n")
+        try:
+            return subprocess.run(
+                cmd,
+                cwd=cwd,
+                check=check,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+        except subprocess.CalledProcessError:
+            print(f"\nCommand failed. Log tail from {log_path}:\n{_tail(log_path)}")
+            raise
 
 
 def _safe_name(ref: str) -> str:
@@ -77,6 +110,8 @@ def build(commit: str, jobs: int):
     RESULTS_DIR.mkdir(exist_ok=True)
     commit_name = _safe_name(commit)
     venv_dir = RESULTS_DIR / f"venv-{commit_name}"
+    commit_dir = RESULTS_DIR / commit_name
+    commit_dir.mkdir(parents=True, exist_ok=True)
 
     # Use a completely isolated build directory per commit so there is zero
     # chance of stale FetchContent caches or patch artifacts from a previous
@@ -99,7 +134,6 @@ def build(commit: str, jobs: int):
 
     venv_python = venv_dir / "bin" / "python"
     venv_pip = venv_dir / "bin" / "pip"
-    run([str(venv_python), "-m", "pip", "install", "--upgrade", "pip"])
     run([str(venv_pip), "install", *ORTOOLS_PYTHON_BUILD_DEPS])
 
     # 1. checkout commit (force to discard any local changes from prior builds)
@@ -112,21 +146,36 @@ def build(commit: str, jobs: int):
     # compile without the patch (the patch was only needed for newer upstream
     # commits that broke the build).
     _maybe_disable_pybind11_protobuf_patch(OR_TOOLS_DIR)
-    run([
+    configure_cmd = [
         "cmake", "-S", str(OR_TOOLS_DIR), "-B", str(build_dir),
         "-DBUILD_PYTHON=ON",
         "-DCMAKE_BUILD_TYPE=Release",
         "-DBUILD_DEPS=ON",
         "-DFETCH_PYTHON_DEPS=OFF",
         f"-DPython3_EXECUTABLE={venv_python}",
-    ])
+    ]
+    run(configure_cmd, log_path=commit_dir / "configure.log")
 
     # 3. build the python_package target
-    run([
+    build_cmd = [
         "cmake", "--build", str(build_dir),
         "--target", "python_package",
         "-j", str(jobs),
-    ])
+    ]
+    try:
+        run(build_cmd, log_path=commit_dir / "build.log")
+    except subprocess.CalledProcessError:
+        run([
+            "cmake", "--build", str(build_dir),
+            "--target", "python_package",
+            "--verbose",
+            "-j", "1",
+        ], check=False, log_path=commit_dir / "build-verbose-retry.log")
+        print(
+            f"\nVerbose retry log tail from {commit_dir / 'build-verbose-retry.log'}:\n"
+            f"{_tail(commit_dir / 'build-verbose-retry.log')}"
+        )
+        raise
 
     # 4. locate the produced wheel
     wheel_candidates = list((build_dir / "python" / "dist").glob("*.whl"))

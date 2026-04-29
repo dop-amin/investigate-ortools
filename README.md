@@ -63,5 +63,6 @@ Options:
 - Python build-time modules such as `mypy_protobuf` are installed into the per-commit venv before CMake configure. The build points CMake at that venv and disables OR-Tools' `FETCH_PYTHON_DEPS` path to avoid `pip --user` writes into an immutable Nix Python.
 - Historical or-tools commits that fetch `pybind11_protobuf` from `main` are patched during the build to use a fixed commit and skip the now-fragile local patch. Override the pin with `ORTOOLS_PYBIND11_PROTOBUF_TAG=<commit>` if needed.
 - SLOTHY is installed with `--no-deps` so its pinned PyPI `ortools` dependency cannot overwrite the locally built wheel under test.
+- Configure/build logs are written to `results/<commit>/configure.log`, `build.log`, and, after build failures, `build-verbose-retry.log`.
 - Each commit rebuild takes 15–30 minutes on a typical x86_64 machine. The full bisect (~8 steps) will run overnight.
 - The target machine for evaluation is x86_64 Debian Linux.
