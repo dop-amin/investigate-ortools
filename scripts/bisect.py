@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
+import traceback
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).parent.parent.resolve()
@@ -28,12 +29,21 @@ def git(cmd, cwd=OR_TOOLS_DIR, check=True):
 
 def classify(summary: dict, baseline_median: float) -> str:
     """Classify a benchmark summary as 'good', 'bad', or 'skip'."""
+    # Infrastructure failures do not identify solver behavior.
+    if summary.get("build_error") or summary.get("run_error"):
+        return "skip"
+
     # Any hard failure indicating the solver gave up -> definitely bad
-    if summary["any_no_solution"] or summary["any_binary_search_limit"]:
+    if summary.get("any_no_solution") or summary.get("any_binary_search_limit"):
+        return "bad"
+
+    # A solver UNKNOWN is the regression signal even if SLOTHY's final exception
+    # text changes across revisions.
+    if summary.get("any_unknown"):
         return "bad"
 
     # If it failed for an unknown reason, we can't classify -> skip
-    if summary["any_failed"]:
+    if summary.get("any_failed") or summary.get("any_timed_out"):
         return "skip"
 
     # All runs succeeded. Use timing criterion.
@@ -45,27 +55,71 @@ def classify(summary: dict, baseline_median: float) -> str:
 
 def test_commit(commit: str, args) -> dict:
     """Build or-tools at *commit* and run the SLOTHY benchmark."""
-    commit_dir = RESULTS_DIR / commit
+    commit_name = build_ortools._safe_name(commit)
+    commit_dir = RESULTS_DIR / commit_name
     commit_dir.mkdir(parents=True, exist_ok=True)
+    out_json = commit_dir / "result.json"
 
     # Build
     print(f"\n{'=' * 60}")
     print(f"Building or-tools @ {commit}")
     print(f"{'=' * 60}")
-    python_path = build_ortools.build(commit, args.jobs)
+    try:
+        python_path = build_ortools.build(commit, args.jobs)
+    except Exception as exc:
+        summary = {
+            "commit": commit,
+            "build_error": {
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "traceback_tail": traceback.format_exc()[-4000:],
+            },
+            "run_error": None,
+            "runs": [],
+            "median_elapsed": 0.0,
+            "any_failed": True,
+            "any_timed_out": False,
+            "any_unknown": False,
+            "any_binary_search_limit": False,
+            "any_no_solution": False,
+        }
+        with open(out_json, "w") as f:
+            json.dump(summary, f, indent=2)
+        return summary
 
     # Run benchmark
     print(f"\n{'=' * 60}")
     print(f"Running SLOTHY benchmark @ {commit}")
     print(f"{'=' * 60}")
-    out_json = commit_dir / "result.json"
-    summary = run_slothy.run_benchmark(python_path, args.runs, args.timeout)
+    try:
+        summary = run_slothy.run_benchmark(python_path, args.runs, args.timeout)
+        summary["commit"] = commit
+        summary["build_error"] = None
+        summary["run_error"] = None
+    except Exception as exc:
+        summary = {
+            "commit": commit,
+            "python_path": python_path,
+            "build_error": None,
+            "run_error": {
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "traceback_tail": traceback.format_exc()[-4000:],
+            },
+            "runs": [],
+            "median_elapsed": 0.0,
+            "any_failed": True,
+            "any_timed_out": False,
+            "any_unknown": False,
+            "any_binary_search_limit": False,
+            "any_no_solution": False,
+        }
 
     with open(out_json, "w") as f:
         json.dump(summary, f, indent=2)
 
     # Clean up venv to save disk space
-    venv_dir = RESULTS_DIR / f"venv-{commit}"
+    venv_dir = RESULTS_DIR / f"venv-{commit_name}"
     if venv_dir.exists():
         shutil.rmtree(venv_dir)
 
@@ -103,7 +157,15 @@ def main():
         baseline_median = good_summary["median_elapsed"]
         print(f"\nGOOD ({args.good}): median={baseline_median}s, "
               f"any_failed={good_summary['any_failed']}, "
+              f"any_unknown={good_summary['any_unknown']}, "
               f"any_no_solution={good_summary['any_no_solution']}")
+
+        if classify(good_summary, 0.0) != "good":
+            print("\n" + "!" * 60)
+            print("GOOD boundary did not classify as good; bisect aborted.")
+            print("Inspect its result.json before continuing.")
+            print("!" * 60)
+            return
 
         # Test BAD boundary
         print(f"\n{'=' * 60}")
@@ -112,10 +174,13 @@ def main():
         bad_summary = test_commit(args.bad, args)
         print(f"\nBAD ({args.bad}): median={bad_summary['median_elapsed']}s, "
               f"any_failed={bad_summary['any_failed']}, "
+              f"any_unknown={bad_summary['any_unknown']}, "
               f"any_no_solution={bad_summary['any_no_solution']}")
 
         # Decide whether to proceed
-        if not bad_summary["any_no_solution"] and not bad_summary["any_binary_search_limit"]:
+        if (not bad_summary["any_no_solution"]
+                and not bad_summary["any_binary_search_limit"]
+                and not bad_summary["any_unknown"]):
             if not bad_summary["any_failed"]:
                 if baseline_median > 0 and bad_summary["median_elapsed"] < 1.3 * baseline_median:
                     print("\n" + "!" * 60)
@@ -158,7 +223,7 @@ def main():
             print(f"{'=' * 60}")
 
             # If we already tested this commit during boundaries, reuse results
-            commit_dir = RESULTS_DIR / commit
+            commit_dir = RESULTS_DIR / build_ortools._safe_name(commit)
             cached = commit_dir / "result.json"
             if cached.exists():
                 print("Using cached results from boundary test.")

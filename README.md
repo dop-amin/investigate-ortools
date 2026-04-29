@@ -60,5 +60,7 @@ Options:
 ## Notes
 
 - or-tools is built with `BUILD_DEPS=ON`, so it automatically fetches its pinned abseil/protobuf/re2/etc. for each commit. The Nix flake only provides the host toolchain.
+- Historical or-tools commits that fetch `pybind11_protobuf` from `main` are patched during the build to use a fixed commit and skip the now-fragile local patch. Override the pin with `ORTOOLS_PYBIND11_PROTOBUF_TAG=<commit>` if needed.
+- SLOTHY is installed with `--no-deps` so its pinned PyPI `ortools` dependency cannot overwrite the locally built wheel under test.
 - Each commit rebuild takes 15–30 minutes on a typical x86_64 machine. The full bisect (~8 steps) will run overnight.
 - The target machine for evaluation is x86_64 Debian Linux.

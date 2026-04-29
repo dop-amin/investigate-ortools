@@ -21,18 +21,43 @@ EXAMPLE_NAME = "ntt_dilithium_123_45678_a55"
 def run_once(python_path: str, timeout: int):
     """Execute one run of the example and return structured metrics."""
     start = time.monotonic()
-    proc = subprocess.run(
-        [
-            python_path,
-            str(SLOTHY_EXAMPLE),
-            "--examples", EXAMPLE_NAME,
-            "--timeout", str(timeout),
-        ],
-        cwd=REPO_ROOT / "slothy",
-        capture_output=True,
-        text=True,
-        timeout=timeout + 60,  # hard grace period for teardown / log flushing
-    )
+    cmd = [
+        python_path,
+        str(SLOTHY_EXAMPLE),
+        "--examples", EXAMPLE_NAME,
+        "--timeout", str(timeout),
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=REPO_ROOT / "slothy",
+            capture_output=True,
+            text=True,
+            timeout=timeout + 60,  # hard grace period for teardown / log flushing
+        )
+    except subprocess.TimeoutExpired as exc:
+        elapsed = time.monotonic() - start
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode(errors="replace")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode(errors="replace")
+        combined = stdout + "\n" + stderr
+        return {
+            "success": False,
+            "returncode": None,
+            "elapsed_seconds": round(elapsed, 2),
+            "timed_out": True,
+            "unknown": "UNKNOWN" in combined,
+            "binary_search_limit": "BinarySearchLimitException" in combined,
+            "no_solution": "No solution found" in combined or "SlothyException" in combined,
+            "optimization_times": [],
+            "reported_total_seconds": None,
+            "stdout_tail": stdout[-4000:] if len(stdout) > 4000 else stdout,
+            "stderr_tail": stderr[-4000:] if len(stderr) > 4000 else stderr,
+        }
+
     elapsed = time.monotonic() - start
 
     stdout = proc.stdout or ""
@@ -56,6 +81,7 @@ def run_once(python_path: str, timeout: int):
         "success": not failed,
         "returncode": proc.returncode,
         "elapsed_seconds": round(elapsed, 2),
+        "timed_out": False,
         "unknown": unknown,
         "binary_search_limit": binary_search_limit,
         "no_solution": no_solution,
@@ -68,6 +94,9 @@ def run_once(python_path: str, timeout: int):
 
 def run_benchmark(python_path: str, runs: int, timeout: int):
     """Run the benchmark *runs* times and produce a summary."""
+    if runs < 1:
+        raise ValueError("runs must be at least 1")
+
     results = []
     for i in range(runs):
         print(f"\n=== Run {i + 1}/{runs} ===", flush=True)
@@ -90,6 +119,7 @@ def run_benchmark(python_path: str, runs: int, timeout: int):
         "min_elapsed": round(sorted_elapsed[0], 2),
         "max_elapsed": round(sorted_elapsed[-1], 2),
         "any_failed": any(not r["success"] for r in results),
+        "any_timed_out": any(r["timed_out"] for r in results),
         "any_unknown": any(r["unknown"] for r in results),
         "any_binary_search_limit": any(r["binary_search_limit"] for r in results),
         "any_no_solution": any(r["no_solution"] for r in results),
