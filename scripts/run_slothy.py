@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -16,6 +17,33 @@ RESULTS_DIR = REPO_ROOT / "results"
 
 # The example name that historically triggers the regression.
 EXAMPLE_NAME = "ntt_dilithium_123_45678_a55"
+
+
+def runtime_env():
+    """Return an environment with Nix GCC runtime libraries discoverable."""
+    env = os.environ.copy()
+
+    for compiler in ("c++", "g++", "gcc"):
+        compiler_path = shutil.which(compiler)
+        if compiler_path is None:
+            continue
+
+        probe = subprocess.run(
+            [compiler_path, "-print-file-name=libstdc++.so.6"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        libstdcxx = Path(probe.stdout.strip())
+        if libstdcxx.is_file():
+            lib_dir = str(libstdcxx.parent)
+            existing = env.get("LD_LIBRARY_PATH", "")
+            paths = existing.split(os.pathsep) if existing else []
+            if lib_dir not in paths:
+                env["LD_LIBRARY_PATH"] = os.pathsep.join([lib_dir, *paths])
+            break
+
+    return env
 
 
 def run_once(python_path: str, timeout: int):
@@ -33,6 +61,7 @@ def run_once(python_path: str, timeout: int):
             cwd=REPO_ROOT / "slothy",
             capture_output=True,
             text=True,
+            env=runtime_env(),
             timeout=timeout + 60,  # hard grace period for teardown / log flushing
         )
     except subprocess.TimeoutExpired as exc:

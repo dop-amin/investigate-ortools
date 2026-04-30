@@ -18,8 +18,8 @@ PYBIND11_PROTOBUF_TAG = os.environ.get(
     "ORTOOLS_PYBIND11_PROTOBUF_TAG",
     "f02a2b7653bc50eb5119d125842a3870db95d251",
 )
-SLOTHY_RUNTIME_DEPS = ["pandas>=2.0.3", "sympy==1.14.0", "unicorn==2.1.4"]
-PYTHON_DEP_CONSTRAINTS = ["protobuf<=6.31.1"]
+SLOTHY_RUNTIME_DEPS = ["pandas==1.5.3", "sympy==1.14.0", "unicorn==2.1.4"]
+PYTHON_DEP_CONSTRAINTS = ["numpy==1.24.3", "protobuf<=6.31.1"]
 ORTOOLS_PYTHON_BUILD_DEPS = [
     "pip==23.1.2",
     "setuptools==67.7.2",

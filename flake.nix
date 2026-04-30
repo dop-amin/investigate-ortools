@@ -29,6 +29,7 @@
           ];
 
           shellHook = ''
+            export LD_LIBRARY_PATH="${pkgs.stdenv.cc.cc.lib}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
             echo "or-tools bisection environment ready"
             echo "cmake: $(cmake --version | head -n1)"
             echo "python: $(python3 --version)"
