@@ -61,6 +61,7 @@ Options:
 ## Notes
 
 - or-tools is built with `BUILD_DEPS=ON`, so it automatically fetches its pinned abseil/protobuf/re2/etc. for each commit. The Nix flake only provides the host toolchain.
+- SCIP support is disabled (`USE_SCIP=OFF`) because SLOTHY exercises CP-SAT only, and building GSCIP can fail on newer hardened compilers.
 - Python build-time modules such as `mypy_protobuf` are installed into the per-commit venv before CMake configure. The build points CMake at that venv and disables OR-Tools' `FETCH_PYTHON_DEPS` path to avoid `pip --user` writes into an immutable Nix Python.
 - Historical or-tools commits that fetch `pybind11_protobuf` from `main` are patched during the build to use a fixed commit and skip the now-fragile local patch. Override the pin with `ORTOOLS_PYBIND11_PROTOBUF_TAG=<commit>` if needed.
 - SLOTHY is run directly from the checked-out submodule; only its Python runtime dependencies are installed into the per-commit venv.

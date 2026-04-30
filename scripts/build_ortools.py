@@ -161,6 +161,7 @@ def build(commit: str, jobs: int):
             "-DCMAKE_BUILD_TYPE=Release",
             "-DBUILD_DEPS=ON",
             "-DFETCH_PYTHON_DEPS=OFF",
+            "-DUSE_SCIP=OFF",
             f"-DPython3_EXECUTABLE={venv_python}",
         ]
         run(configure_cmd, log_path=commit_dir / "configure.log", env=build_env)
