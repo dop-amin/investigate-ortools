@@ -46,6 +46,42 @@ def runtime_env():
     return env
 
 
+def classify_failure(returncode, combined):
+    """Classify why a benchmark subprocess did not complete cleanly."""
+    if returncode == 0:
+        return None
+    if returncode is None:
+        return "timeout"
+    if returncode is not None and returncode < 0:
+        return f"terminated_by_signal_{-returncode}"
+    if "Traceback (most recent call last):" in combined:
+        return "python_traceback"
+    if "ImportError" in combined or "ModuleNotFoundError" in combined:
+        return "python_import_error"
+    if "UNKNOWN" in combined:
+        return "solver_unknown"
+    if "BinarySearchLimitException" in combined:
+        return "binary_search_limit"
+    if "No solution found" in combined or "SlothyException" in combined:
+        return "no_solution"
+    return f"nonzero_exit_{returncode}"
+
+
+def output_tail(stdout, stderr, lines=20):
+    """Return a compact diagnostic tail from both subprocess streams."""
+    chunks = []
+    if stderr:
+        chunks.append(("stderr", stderr))
+    if stdout:
+        chunks.append(("stdout", stdout))
+
+    rendered = []
+    for name, text in chunks:
+        rendered.append(f"{name} tail:")
+        rendered.extend(f"  {line}" for line in text.splitlines()[-lines:])
+    return "\n".join(rendered)
+
+
 def run_once(python_path: str, timeout: int):
     """Execute one run of the example and return structured metrics."""
     start = time.monotonic()
@@ -73,11 +109,13 @@ def run_once(python_path: str, timeout: int):
         if isinstance(stderr, bytes):
             stderr = stderr.decode(errors="replace")
         combined = stdout + "\n" + stderr
+        failure_reason = classify_failure(None, combined)
         return {
             "success": False,
             "returncode": None,
             "elapsed_seconds": round(elapsed, 2),
             "timed_out": True,
+            "failure_reason": failure_reason,
             "unknown": "UNKNOWN" in combined,
             "binary_search_limit": "BinarySearchLimitException" in combined,
             "no_solution": "No solution found" in combined or "SlothyException" in combined,
@@ -97,6 +135,7 @@ def run_once(python_path: str, timeout: int):
     unknown = "UNKNOWN" in combined
     binary_search_limit = "BinarySearchLimitException" in combined
     no_solution = "No solution found" in combined or "SlothyException" in combined
+    failure_reason = classify_failure(proc.returncode, combined)
 
     # Try to extract per-optimization times logged by SLOTHY
     time_matches = re.findall(r"Optimization took ([\d.]+)s", combined)
@@ -111,6 +150,7 @@ def run_once(python_path: str, timeout: int):
         "returncode": proc.returncode,
         "elapsed_seconds": round(elapsed, 2),
         "timed_out": False,
+        "failure_reason": failure_reason,
         "unknown": unknown,
         "binary_search_limit": binary_search_limit,
         "no_solution": no_solution,
@@ -132,15 +172,17 @@ def run_benchmark(python_path: str, runs: int, timeout: int):
         result = run_once(python_path, timeout)
         results.append(result)
         print(
-            f"  success={result['success']}, elapsed={result['elapsed_seconds']}s, "
-            f"unknown={result['unknown']}, binary_search_limit={result['binary_search_limit']}",
+            f"  success={result['success']}, returncode={result['returncode']}, "
+            f"elapsed={result['elapsed_seconds']}s, unknown={result['unknown']}, "
+            f"binary_search_limit={result['binary_search_limit']}, "
+            f"failure_reason={result['failure_reason']}",
             flush=True,
         )
         if not result["success"]:
-            tail = result["stderr_tail"] or result["stdout_tail"]
+            tail = output_tail(result["stdout_tail"], result["stderr_tail"])
             if tail:
                 print("  failure tail:")
-                print("\n".join(f"    {line}" for line in tail.splitlines()[-20:]))
+                print("\n".join(f"    {line}" for line in tail.splitlines()))
 
     sorted_elapsed = sorted(r["elapsed_seconds"] for r in results)
     median_elapsed = sorted_elapsed[len(sorted_elapsed) // 2]
@@ -157,6 +199,9 @@ def run_benchmark(python_path: str, runs: int, timeout: int):
         "any_unknown": any(r["unknown"] for r in results),
         "any_binary_search_limit": any(r["binary_search_limit"] for r in results),
         "any_no_solution": any(r["no_solution"] for r in results),
+        "failure_reasons": sorted(
+            {r["failure_reason"] for r in results if r["failure_reason"] is not None}
+        ),
     }
     return summary
 
