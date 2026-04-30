@@ -33,16 +33,13 @@ def classify(summary: dict, baseline_median: float) -> str:
     if summary.get("build_error") or summary.get("run_error"):
         return "skip"
 
-    # Any hard failure indicating the solver gave up -> definitely bad
+    # Any hard failure indicating SLOTHY could not find a usable solution is bad.
     if summary.get("any_no_solution") or summary.get("any_binary_search_limit"):
         return "bad"
 
-    # A solver UNKNOWN is the regression signal even if SLOTHY's final exception
-    # text changes across revisions.
-    if summary.get("any_unknown"):
-        return "bad"
-
-    # If it failed for an unknown reason, we can't classify -> skip
+    # Intermediate UNKNOWN statuses are acceptable if SLOTHY ultimately succeeds.
+    # If the run failed without the known no-solution signature, this is an
+    # infrastructure or unexpected runtime failure rather than a bisect signal.
     if summary.get("any_failed") or summary.get("any_timed_out"):
         return "skip"
 
@@ -192,8 +189,7 @@ def main():
 
         # Decide whether to proceed
         if (not bad_summary["any_no_solution"]
-                and not bad_summary["any_binary_search_limit"]
-                and not bad_summary["any_unknown"]):
+                and not bad_summary["any_binary_search_limit"]):
             if not bad_summary["any_failed"]:
                 if baseline_median > 0 and bad_summary["median_elapsed"] < 1.3 * baseline_median:
                     print("\n" + "!" * 60)
