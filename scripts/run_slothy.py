@@ -107,6 +107,11 @@ def run_benchmark(python_path: str, runs: int, timeout: int):
             f"unknown={result['unknown']}, binary_search_limit={result['binary_search_limit']}",
             flush=True,
         )
+        if not result["success"]:
+            tail = result["stderr_tail"] or result["stdout_tail"]
+            if tail:
+                print("  failure tail:")
+                print("\n".join(f"    {line}" for line in tail.splitlines()[-20:]))
 
     sorted_elapsed = sorted(r["elapsed_seconds"] for r in results)
     median_elapsed = sorted_elapsed[len(sorted_elapsed) // 2]

@@ -18,7 +18,7 @@ PYBIND11_PROTOBUF_TAG = os.environ.get(
     "ORTOOLS_PYBIND11_PROTOBUF_TAG",
     "f02a2b7653bc50eb5119d125842a3870db95d251",
 )
-SLOTHY_RUNTIME_DEPS = ["sympy==1.14.0", "unicorn==2.1.4"]
+SLOTHY_RUNTIME_DEPS = ["pandas>=2.0.3", "sympy==1.14.0", "unicorn==2.1.4"]
 PYTHON_DEP_CONSTRAINTS = ["protobuf<=6.31.1"]
 ORTOOLS_PYTHON_BUILD_DEPS = [
     "pip==23.1.2",
@@ -189,12 +189,12 @@ def build(commit: str, jobs: int):
     wheel = wheel_candidates[0]
     print(f"Found wheel: {wheel}")
 
-    # 5. install wheel + SLOTHY in editable mode.  SLOTHY's metadata pins an
-    # or-tools release from PyPI, so install it with --no-deps to preserve the
-    # wheel built from the commit under test.
+    # 5. install the wheel and SLOTHY's runtime dependencies.  Do not install
+    # SLOTHY itself: run_slothy.py executes slothy/example.py from the checked
+    # out submodule, which keeps the benchmark tied to this repository state and
+    # avoids invoking SLOTHY's package metadata.
     run([str(venv_pip), "install", str(wheel), *PYTHON_DEP_CONSTRAINTS])
     run([str(venv_pip), "install", *SLOTHY_RUNTIME_DEPS])
-    run([str(venv_pip), "install", "--no-deps", "-e", str(SLOTHY_DIR)])
 
     # 6. free disk space by removing the C++ build tree
     shutil.rmtree(build_dir)
