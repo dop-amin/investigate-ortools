@@ -19,6 +19,13 @@ RESULTS_DIR = REPO_ROOT / "results"
 EXAMPLE_NAME = "ntt_dilithium_123_45678_a55"
 
 
+def default_hard_timeout(solver_timeout: int) -> int:
+    """Return the default whole-process timeout for one benchmark run."""
+    if solver_timeout <= 0:
+        return 0
+    return max(3600, solver_timeout * 20)
+
+
 def runtime_env():
     """Return an environment with Nix GCC runtime libraries discoverable."""
     env = os.environ.copy()
@@ -82,7 +89,7 @@ def output_tail(stdout, stderr, lines=20):
     return "\n".join(rendered)
 
 
-def run_once(python_path: str, timeout: int):
+def run_once(python_path: str, timeout: int, hard_timeout: int):
     """Execute one run of the example and return structured metrics."""
     start = time.monotonic()
     cmd = [
@@ -98,7 +105,7 @@ def run_once(python_path: str, timeout: int):
             capture_output=True,
             text=True,
             env=runtime_env(),
-            timeout=timeout + 60,  # hard grace period for teardown / log flushing
+            timeout=hard_timeout if hard_timeout > 0 else None,
         )
     except subprocess.TimeoutExpired as exc:
         elapsed = time.monotonic() - start
@@ -115,6 +122,7 @@ def run_once(python_path: str, timeout: int):
             "returncode": None,
             "elapsed_seconds": round(elapsed, 2),
             "timed_out": True,
+            "hard_timeout_seconds": hard_timeout,
             "failure_reason": failure_reason,
             "unknown": "UNKNOWN" in combined,
             "binary_search_limit": "BinarySearchLimitException" in combined,
@@ -150,6 +158,7 @@ def run_once(python_path: str, timeout: int):
         "returncode": proc.returncode,
         "elapsed_seconds": round(elapsed, 2),
         "timed_out": False,
+        "hard_timeout_seconds": hard_timeout,
         "failure_reason": failure_reason,
         "unknown": unknown,
         "binary_search_limit": binary_search_limit,
@@ -161,15 +170,17 @@ def run_once(python_path: str, timeout: int):
     }
 
 
-def run_benchmark(python_path: str, runs: int, timeout: int):
+def run_benchmark(python_path: str, runs: int, timeout: int, hard_timeout: int = None):
     """Run the benchmark *runs* times and produce a summary."""
     if runs < 1:
         raise ValueError("runs must be at least 1")
+    if hard_timeout is None:
+        hard_timeout = default_hard_timeout(timeout)
 
     results = []
     for i in range(runs):
         print(f"\n=== Run {i + 1}/{runs} ===", flush=True)
-        result = run_once(python_path, timeout)
+        result = run_once(python_path, timeout, hard_timeout)
         results.append(result)
         print(
             f"  success={result['success']}, returncode={result['returncode']}, "
@@ -191,6 +202,8 @@ def run_benchmark(python_path: str, runs: int, timeout: int):
         "python_path": python_path,
         "example": EXAMPLE_NAME,
         "runs": results,
+        "solver_timeout_seconds": timeout,
+        "hard_timeout_seconds": hard_timeout,
         "median_elapsed": round(median_elapsed, 2),
         "min_elapsed": round(sorted_elapsed[0], 2),
         "max_elapsed": round(sorted_elapsed[-1], 2),
@@ -211,10 +224,16 @@ if __name__ == "__main__":
     parser.add_argument("python_path", help="Path to python in the or-tools venv")
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument(
+        "--hard-timeout",
+        type=int,
+        default=None,
+        help="Whole-process timeout per run in seconds; default is max(3600, timeout*20). Use 0 to disable.",
+    )
     parser.add_argument("--out", "-o", help="JSON output file")
     args = parser.parse_args()
 
-    summary = run_benchmark(args.python_path, args.runs, args.timeout)
+    summary = run_benchmark(args.python_path, args.runs, args.timeout, args.hard_timeout)
 
     if args.out:
         with open(args.out, "w") as f:

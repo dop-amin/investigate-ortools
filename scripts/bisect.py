@@ -92,7 +92,9 @@ def test_commit(commit: str, args) -> dict:
     print(f"Running SLOTHY benchmark @ {commit}")
     print(f"{'=' * 60}")
     try:
-        summary = run_slothy.run_benchmark(python_path, args.runs, args.timeout)
+        summary = run_slothy.run_benchmark(
+            python_path, args.runs, args.timeout, args.hard_timeout
+        )
         summary["commit"] = commit
         summary["build_error"] = None
         summary["run_error"] = None
@@ -131,7 +133,18 @@ def main():
     parser.add_argument("--good", default="v9.7", help="Known-good tag or commit")
     parser.add_argument("--bad", default="v9.8", help="Known-bad tag or commit")
     parser.add_argument("--runs", type=int, default=3, help="Runs per commit")
-    parser.add_argument("--timeout", type=int, default=300, help="Timeout per run (seconds)")
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=300,
+        help="SLOTHY solver timeout per CP-SAT call, in seconds",
+    )
+    parser.add_argument(
+        "--hard-timeout",
+        type=int,
+        default=None,
+        help="Whole-process timeout per benchmark run in seconds; default is max(3600, timeout*20). Use 0 to disable.",
+    )
     parser.add_argument("--jobs", "-j", type=int, default=max(1, os.cpu_count() - 1),
                         help="CMake build parallelism")
     parser.add_argument("--skip-boundaries", action="store_true",

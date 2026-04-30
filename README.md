@@ -41,7 +41,8 @@ Options:
 - `--good`: Known-good tag/commit (default: `v9.7`)
 - `--bad`: Known-bad tag/commit (default: `v9.8`)
 - `--runs`: Number of test runs per commit (default: 3)
-- `--timeout`: SLOTHY timeout in seconds per run (default: 300)
+- `--timeout`: SLOTHY solver timeout per CP-SAT call in seconds (default: 300)
+- `--hard-timeout`: Whole-process timeout per benchmark run; default is `max(3600, timeout*20)`, and `0` disables it
 - `--jobs`, `-j`: Build parallelism (default: all cores minus one)
 - `--skip-boundaries`: Skip the initial boundary tests (use with care)
 
