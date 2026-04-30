@@ -24,7 +24,7 @@ ORTOOLS_PYTHON_BUILD_DEPS = [
     "pip==23.1.2",
     "setuptools==67.7.2",
     "wheel==0.40.0",
-    "mypy-protobuf>=3.4,<4",
+    "mypy-protobuf==3.4.0",
     "protobuf>=4.23.3,<5",
 ]
 
@@ -38,11 +38,11 @@ def _tail(path: Path, lines: int = 80) -> str:
     return "\n".join(content[-lines:])
 
 
-def run(cmd, cwd=None, check=True, log_path: Optional[Path] = None):
+def run(cmd, cwd=None, check=True, log_path: Optional[Path] = None, env=None):
     """Run a shell command, echoing it first."""
     print(f"  > {' '.join(str(c) for c in cmd)}", flush=True)
     if log_path is None:
-        return subprocess.run(cmd, cwd=cwd, check=check, capture_output=False)
+        return subprocess.run(cmd, cwd=cwd, check=check, capture_output=False, env=env)
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("w", encoding="utf-8") as log:
@@ -52,6 +52,7 @@ def run(cmd, cwd=None, check=True, log_path: Optional[Path] = None):
                 cmd,
                 cwd=cwd,
                 check=check,
+                env=env,
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -135,6 +136,8 @@ def build(commit: str, jobs: int):
     venv_python = venv_dir / "bin" / "python"
     venv_pip = venv_dir / "bin" / "pip"
     run([str(venv_pip), "install", *ORTOOLS_PYTHON_BUILD_DEPS])
+    build_env = os.environ.copy()
+    build_env["PATH"] = f"{venv_dir / 'bin'}{os.pathsep}{build_env.get('PATH', '')}"
 
     # 1. checkout commit (force to discard any local changes from prior builds)
     run(["git", "checkout", "-f", commit], cwd=OR_TOOLS_DIR)
@@ -154,7 +157,7 @@ def build(commit: str, jobs: int):
         "-DFETCH_PYTHON_DEPS=OFF",
         f"-DPython3_EXECUTABLE={venv_python}",
     ]
-    run(configure_cmd, log_path=commit_dir / "configure.log")
+    run(configure_cmd, log_path=commit_dir / "configure.log", env=build_env)
 
     # 3. build the python_package target
     build_cmd = [
@@ -163,14 +166,14 @@ def build(commit: str, jobs: int):
         "-j", str(jobs),
     ]
     try:
-        run(build_cmd, log_path=commit_dir / "build.log")
+        run(build_cmd, log_path=commit_dir / "build.log", env=build_env)
     except subprocess.CalledProcessError:
         run([
             "cmake", "--build", str(build_dir),
             "--target", "python_package",
             "--verbose",
             "-j", "1",
-        ], check=False, log_path=commit_dir / "build-verbose-retry.log")
+        ], check=False, log_path=commit_dir / "build-verbose-retry.log", env=build_env)
         print(
             f"\nVerbose retry log tail from {commit_dir / 'build-verbose-retry.log'}:\n"
             f"{_tail(commit_dir / 'build-verbose-retry.log')}"
