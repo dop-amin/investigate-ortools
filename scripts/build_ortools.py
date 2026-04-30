@@ -25,6 +25,7 @@ ORTOOLS_PYTHON_BUILD_DEPS = [
     "setuptools==67.7.2",
     "wheel==0.40.0",
     "mypy-protobuf==3.4.0",
+    "mypy==1.6.1",
     "protobuf>=4.23.3,<5",
 ]
 
@@ -106,6 +107,11 @@ def _maybe_disable_pybind11_protobuf_patch(or_tools_dir: Path) -> None:
     print(f"  Pinned pybind11_protobuf to {PYBIND11_PROTOBUF_TAG} and disabled its patch")
 
 
+def _restore_or_tools_checkout() -> None:
+    """Remove temporary source edits applied for the current build."""
+    run(["git", "checkout", "-f"], cwd=OR_TOOLS_DIR)
+
+
 def build(commit: str, jobs: int):
     """Checkout *commit*, build the Python wheel, install into a venv, return python path."""
     RESULTS_DIR.mkdir(exist_ok=True)
@@ -142,43 +148,45 @@ def build(commit: str, jobs: int):
     # 1. checkout commit (force to discard any local changes from prior builds)
     run(["git", "checkout", "-f", commit], cwd=OR_TOOLS_DIR)
 
-    # The 'pybind11_protobuf' dependency in or-tools v9.7/v9.8 fetches from the
-    # 'main' branch (a moving target) and applies a patch that frequently
-    # breaks when upstream changes.  To avoid patch failures during bisecting,
-    # we temporarily replace the live fetch with a fixed tag that is known to
-    # compile without the patch (the patch was only needed for newer upstream
-    # commits that broke the build).
-    _maybe_disable_pybind11_protobuf_patch(OR_TOOLS_DIR)
-    configure_cmd = [
-        "cmake", "-S", str(OR_TOOLS_DIR), "-B", str(build_dir),
-        "-DBUILD_PYTHON=ON",
-        "-DCMAKE_BUILD_TYPE=Release",
-        "-DBUILD_DEPS=ON",
-        "-DFETCH_PYTHON_DEPS=OFF",
-        f"-DPython3_EXECUTABLE={venv_python}",
-    ]
-    run(configure_cmd, log_path=commit_dir / "configure.log", env=build_env)
-
-    # 3. build the python_package target
-    build_cmd = [
-        "cmake", "--build", str(build_dir),
-        "--target", "python_package",
-        "-j", str(jobs),
-    ]
     try:
-        run(build_cmd, log_path=commit_dir / "build.log", env=build_env)
-    except subprocess.CalledProcessError:
-        run([
+        # The 'pybind11_protobuf' dependency in or-tools v9.7/v9.8 fetches from
+        # the 'main' branch (a moving target) and applies a patch that
+        # frequently breaks when upstream changes.  To avoid patch failures
+        # during bisecting, we temporarily replace the live fetch with a fixed
+        # tag that is known to compile without the patch.
+        _maybe_disable_pybind11_protobuf_patch(OR_TOOLS_DIR)
+        configure_cmd = [
+            "cmake", "-S", str(OR_TOOLS_DIR), "-B", str(build_dir),
+            "-DBUILD_PYTHON=ON",
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DBUILD_DEPS=ON",
+            "-DFETCH_PYTHON_DEPS=OFF",
+            f"-DPython3_EXECUTABLE={venv_python}",
+        ]
+        run(configure_cmd, log_path=commit_dir / "configure.log", env=build_env)
+
+        # 3. build the python_package target
+        build_cmd = [
             "cmake", "--build", str(build_dir),
             "--target", "python_package",
-            "--verbose",
-            "-j", "1",
-        ], check=False, log_path=commit_dir / "build-verbose-retry.log", env=build_env)
-        print(
-            f"\nVerbose retry log tail from {commit_dir / 'build-verbose-retry.log'}:\n"
-            f"{_tail(commit_dir / 'build-verbose-retry.log')}"
-        )
-        raise
+            "-j", str(jobs),
+        ]
+        try:
+            run(build_cmd, log_path=commit_dir / "build.log", env=build_env)
+        except subprocess.CalledProcessError:
+            run([
+                "cmake", "--build", str(build_dir),
+                "--target", "python_package",
+                "--verbose",
+                "-j", "1",
+            ], check=False, log_path=commit_dir / "build-verbose-retry.log", env=build_env)
+            print(
+                f"\nVerbose retry log tail from {commit_dir / 'build-verbose-retry.log'}:\n"
+                f"{_tail(commit_dir / 'build-verbose-retry.log')}"
+            )
+            raise
+    finally:
+        _restore_or_tools_checkout()
 
     # 4. locate the produced wheel
     wheel_candidates = list((build_dir / "python" / "dist").glob("*.whl"))

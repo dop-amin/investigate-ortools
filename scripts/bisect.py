@@ -187,20 +187,18 @@ def main():
               f"any_unknown={bad_summary['any_unknown']}, "
               f"any_no_solution={bad_summary['any_no_solution']}")
 
-        # Decide whether to proceed
-        if (not bad_summary["any_no_solution"]
-                and not bad_summary["any_binary_search_limit"]):
-            if not bad_summary["any_failed"]:
-                if baseline_median > 0 and bad_summary["median_elapsed"] < 1.3 * baseline_median:
-                    print("\n" + "!" * 60)
-                    print("WARNING: BAD boundary does NOT reproduce the regression.")
-                    print("The test passes and is not significantly slower on this machine.")
-                    print("Bisect aborted.")
-                    print("!" * 60)
-                    return
+        bad_classification = classify(bad_summary, baseline_median)
+        if bad_classification != "bad":
+            print("\n" + "!" * 60)
+            if bad_classification == "good":
+                print("WARNING: BAD boundary does NOT reproduce the regression.")
+                print("The test passes and is not significantly slower on this machine.")
             else:
-                print("\nBAD boundary failed, but not with the expected UNKNOWN / no-solution pattern.")
-                print("Will attempt bisect anyway; some commits may be classified as 'skip'.")
+                print("BAD boundary failed for infrastructure or unexpected runtime reasons.")
+                print("It cannot be used as the known-bad endpoint for git bisect.")
+            print("Bisect aborted.")
+            print("!" * 60)
+            return
     else:
         print("Skipping boundary tests (--skip-boundaries).")
 
