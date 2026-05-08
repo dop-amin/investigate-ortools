@@ -45,6 +45,16 @@ Options:
 - `--hard-timeout`: Whole-process timeout per benchmark run; default is `max(3600, timeout*20)`, and `0` disables it
 - `--jobs`, `-j`: Build parallelism (default: all cores minus one)
 - `--skip-boundaries`: Skip the initial boundary tests (use with care)
+- `--no-timing-bad`: Only classify no-solution failures as BAD; successful-run slowdowns are ignored
+
+Summarize existing results as a chronological timeline:
+
+```bash
+python3 scripts/timeline.py
+```
+
+The timeline median uses only successful runs. Failed runs are reported
+separately because including partial failed attempts skews timing data.
 
 ## How it works
 
@@ -54,6 +64,7 @@ Options:
    - **BAD** (fallback) if all runs pass but median time is >= 1.3x the `v9.7` median
    - **GOOD** otherwise
    - **SKIP** on unexpected failures (build errors, etc.)
+   - With `--no-timing-bad`, the timing fallback is disabled and only no-solution failures classify as **BAD**.
 3. **Bisect loop**: `git bisect` checks out intermediate commits; each is built and tested.
 4. **Cleanup**: Build directories and per-commit venvs are deleted after testing to save disk space.
 5. **Results**: Everything is logged under `results/<commit>/result.json`. The final `results/bisect.log` and `results/bad_commit.txt` identify the culprit.

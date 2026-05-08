@@ -27,7 +27,7 @@ def git(cmd, cwd=OR_TOOLS_DIR, check=True):
     return subprocess.run(full, cwd=cwd, check=check, capture_output=True, text=True)
 
 
-def classify(summary: dict, baseline_median: float) -> str:
+def classify(summary: dict, baseline_median: float, ignore_timing: bool = False) -> str:
     """Classify a benchmark summary as 'good', 'bad', or 'skip'."""
     # Infrastructure failures do not identify solver behavior.
     if summary.get("build_error") or summary.get("run_error"):
@@ -43,8 +43,10 @@ def classify(summary: dict, baseline_median: float) -> str:
     if summary.get("any_failed") or summary.get("any_timed_out"):
         return "skip"
 
-    # All runs succeeded. Use timing criterion.
-    if baseline_median > 0 and summary["median_elapsed"] >= 1.3 * baseline_median:
+    # All runs succeeded. Optionally use timing as a fallback regression signal.
+    if (not ignore_timing
+            and baseline_median > 0
+            and summary["median_elapsed"] >= 1.3 * baseline_median):
         return "bad"
 
     return "good"
@@ -146,6 +148,11 @@ def main():
                         help="CMake build parallelism")
     parser.add_argument("--skip-boundaries", action="store_true",
                         help="Skip boundary testing and go straight to bisect (use with care)")
+    parser.add_argument(
+        "--no-timing-bad",
+        action="store_true",
+        help="Classify BAD only on no-solution failures; ignore successful-run slowdowns.",
+    )
     args = parser.parse_args()
 
     RESULTS_DIR.mkdir(exist_ok=True)
@@ -170,7 +177,7 @@ def main():
               f"any_unknown={good_summary['any_unknown']}, "
               f"any_no_solution={good_summary['any_no_solution']}")
 
-        if classify(good_summary, 0.0) != "good":
+        if classify(good_summary, 0.0, args.no_timing_bad) != "good":
             print("\n" + "!" * 60)
             print("GOOD boundary did not classify as good; bisect aborted.")
             print("Inspect its result.json before continuing.")
@@ -187,12 +194,18 @@ def main():
               f"any_unknown={bad_summary['any_unknown']}, "
               f"any_no_solution={bad_summary['any_no_solution']}")
 
-        bad_classification = classify(bad_summary, baseline_median)
+        bad_classification = classify(
+            bad_summary, baseline_median, args.no_timing_bad
+        )
         if bad_classification != "bad":
             print("\n" + "!" * 60)
             if bad_classification == "good":
                 print("WARNING: BAD boundary does NOT reproduce the regression.")
-                print("The test passes and is not significantly slower on this machine.")
+                if args.no_timing_bad:
+                    print("The test passes without no-solution failures.")
+                    print("Timing is ignored because --no-timing-bad is set.")
+                else:
+                    print("The test passes and is not significantly slower on this machine.")
             else:
                 print("BAD boundary failed for infrastructure or unexpected runtime reasons.")
                 print("It cannot be used as the known-bad endpoint for git bisect.")
@@ -239,7 +252,7 @@ def main():
             else:
                 summary = test_commit(commit, args)
 
-            classification = classify(summary, baseline_median)
+            classification = classify(summary, baseline_median, args.no_timing_bad)
             print(f"Classification: {classification.upper()}")
 
             if classification == "good":
