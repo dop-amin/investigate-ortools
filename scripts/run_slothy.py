@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 REPO_ROOT = Path(__file__).parent.parent.resolve()
 SLOTHY_EXAMPLE = REPO_ROOT / "slothy" / "example.py"
@@ -19,6 +20,64 @@ RESULTS_DIR = REPO_ROOT / "results"
 EXAMPLE_NAME = "ntt_dilithium_123_45678_a55"
 
 
+def parse_cp_sat_param(value: str):
+    """Parse a key=value CP-SAT parameter override."""
+    if "=" not in value:
+        raise argparse.ArgumentTypeError("CP-SAT parameters must use key=value")
+    key, raw = value.split("=", 1)
+    key = key.strip()
+    raw = raw.strip()
+    if not key:
+        raise argparse.ArgumentTypeError("CP-SAT parameter name cannot be empty")
+
+    lowered = raw.lower()
+    if lowered in {"true", "false"}:
+        parsed = lowered == "true"
+    else:
+        try:
+            parsed = int(raw)
+        except ValueError:
+            try:
+                parsed = float(raw)
+            except ValueError:
+                parsed = raw
+    return key, parsed
+
+
+def _sitecustomize_for_cp_sat_params(cp_sat_params: dict) -> Path:
+    """Create a temporary sitecustomize module that patches CpSolver.__init__."""
+    tmp = RESULTS_DIR / f".cp-sat-params-{os.getpid()}-{time.monotonic_ns()}"
+    tmp.mkdir(parents=True, exist_ok=False)
+    path = tmp / "sitecustomize.py"
+    params_json = json.dumps(cp_sat_params, sort_keys=True)
+    path.write_text(
+        f"""
+import json
+
+_CP_SAT_PARAMS = json.loads({params_json!r})
+
+try:
+    from ortools.sat.python import cp_model
+except Exception:
+    cp_model = None
+
+if cp_model is not None:
+    _original_init = cp_model.CpSolver.__init__
+
+    def _patched_init(self, *args, **kwargs):
+        _original_init(self, *args, **kwargs)
+        for _name, _value in _CP_SAT_PARAMS.items():
+            if not hasattr(self.parameters, _name):
+                raise AttributeError(f"Unknown CP-SAT parameter: {{_name}}")
+            setattr(self.parameters, _name, _value)
+
+    cp_model.CpSolver.__init__ = _patched_init
+""".lstrip(),
+        encoding="utf-8",
+    )
+    return tmp
+
+
 def default_hard_timeout(solver_timeout: int) -> int:
     """Return the default whole-process timeout for one benchmark run."""
     if solver_timeout <= 0:
@@ -26,9 +85,10 @@ def default_hard_timeout(solver_timeout: int) -> int:
     return max(3600, solver_timeout * 20)
 
 
-def runtime_env():
+def runtime_env(cp_sat_params=None):
     """Return an environment with Nix GCC runtime libraries discoverable."""
     env = os.environ.copy()
+    tmp = None
 
     for compiler in ("c++", "g++", "gcc"):
         compiler_path = shutil.which(compiler)
@@ -50,7 +110,16 @@ def runtime_env():
                 env["LD_LIBRARY_PATH"] = os.pathsep.join([lib_dir, *paths])
             break
 
-    return env
+    if cp_sat_params:
+        tmp = _sitecustomize_for_cp_sat_params(cp_sat_params)
+        env["_SLOTHY_CP_SAT_PARAMS_TMP"] = str(tmp)
+        pythonpath = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = (
+            str(tmp) if not pythonpath else f"{tmp}{os.pathsep}{pythonpath}"
+        )
+        env["_SLOTHY_CP_SAT_PARAMS_JSON"] = json.dumps(cp_sat_params, sort_keys=True)
+
+    return env, tmp
 
 
 def classify_failure(returncode, combined):
@@ -89,7 +158,7 @@ def output_tail(stdout, stderr, lines=20):
     return "\n".join(rendered)
 
 
-def run_once(python_path: str, timeout: int, hard_timeout: int):
+def run_once(python_path: str, timeout: int, hard_timeout: int, cp_sat_params=None):
     """Execute one run of the example and return structured metrics."""
     start = time.monotonic()
     cmd = [
@@ -99,14 +168,19 @@ def run_once(python_path: str, timeout: int, hard_timeout: int):
         "--timeout", str(timeout),
     ]
     try:
-        proc = subprocess.run(
-            cmd,
-            cwd=REPO_ROOT / "slothy",
-            capture_output=True,
-            text=True,
-            env=runtime_env(),
-            timeout=hard_timeout if hard_timeout > 0 else None,
-        )
+        env, tmp = runtime_env(cp_sat_params)
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=REPO_ROOT / "slothy",
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=hard_timeout if hard_timeout > 0 else None,
+            )
+        finally:
+            if tmp is not None:
+                shutil.rmtree(tmp, ignore_errors=True)
     except subprocess.TimeoutExpired as exc:
         elapsed = time.monotonic() - start
         stdout = exc.stdout or ""
@@ -170,7 +244,13 @@ def run_once(python_path: str, timeout: int, hard_timeout: int):
     }
 
 
-def run_benchmark(python_path: str, runs: int, timeout: int, hard_timeout: int = None):
+def run_benchmark(
+    python_path: str,
+    runs: int,
+    timeout: int,
+    hard_timeout: int = None,
+    cp_sat_params: Optional[dict] = None,
+):
     """Run the benchmark *runs* times and produce a summary."""
     if runs < 1:
         raise ValueError("runs must be at least 1")
@@ -180,7 +260,7 @@ def run_benchmark(python_path: str, runs: int, timeout: int, hard_timeout: int =
     results = []
     for i in range(runs):
         print(f"\n=== Run {i + 1}/{runs} ===", flush=True)
-        result = run_once(python_path, timeout, hard_timeout)
+        result = run_once(python_path, timeout, hard_timeout, cp_sat_params)
         results.append(result)
         print(
             f"  success={result['success']}, returncode={result['returncode']}, "
@@ -204,6 +284,7 @@ def run_benchmark(python_path: str, runs: int, timeout: int, hard_timeout: int =
         "runs": results,
         "solver_timeout_seconds": timeout,
         "hard_timeout_seconds": hard_timeout,
+        "cp_sat_params": cp_sat_params or {},
         "median_elapsed": round(median_elapsed, 2),
         "min_elapsed": round(sorted_elapsed[0], 2),
         "max_elapsed": round(sorted_elapsed[-1], 2),
@@ -231,9 +312,23 @@ if __name__ == "__main__":
         help="Whole-process timeout per run in seconds; default is max(3600, timeout*20). Use 0 to disable.",
     )
     parser.add_argument("--out", "-o", help="JSON output file")
+    parser.add_argument(
+        "--cp-sat-param",
+        action="append",
+        type=parse_cp_sat_param,
+        default=[],
+        metavar="KEY=VALUE",
+        help="Set a CP-SAT parameter on every SLOTHY CpSolver instance, e.g. use_dynamic_precedence_in_disjunctive=false.",
+    )
     args = parser.parse_args()
 
-    summary = run_benchmark(args.python_path, args.runs, args.timeout, args.hard_timeout)
+    summary = run_benchmark(
+        args.python_path,
+        args.runs,
+        args.timeout,
+        args.hard_timeout,
+        dict(args.cp_sat_param),
+    )
 
     if args.out:
         with open(args.out, "w") as f:
