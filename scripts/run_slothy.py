@@ -158,7 +158,13 @@ def output_tail(stdout, stderr, lines=20):
     return "\n".join(rendered)
 
 
-def run_once(python_path: str, timeout: int, hard_timeout: int, cp_sat_params=None):
+def run_once(
+    python_path: str,
+    timeout: int,
+    hard_timeout: int,
+    cp_sat_params=None,
+    dynamic_precedence=None,
+):
     """Execute one run of the example and return structured metrics."""
     start = time.monotonic()
     cmd = [
@@ -167,6 +173,10 @@ def run_once(python_path: str, timeout: int, hard_timeout: int, cp_sat_params=No
         "--examples", EXAMPLE_NAME,
         "--timeout", str(timeout),
     ]
+    if dynamic_precedence is True:
+        cmd.append("--dynamic-precedence")
+    elif dynamic_precedence is False:
+        cmd.append("--no-dynamic-precedence")
     try:
         env, tmp = runtime_env(cp_sat_params)
         try:
@@ -250,6 +260,7 @@ def run_benchmark(
     timeout: int,
     hard_timeout: int = None,
     cp_sat_params: Optional[dict] = None,
+    dynamic_precedence: Optional[bool] = None,
 ):
     """Run the benchmark *runs* times and produce a summary."""
     if runs < 1:
@@ -260,7 +271,13 @@ def run_benchmark(
     results = []
     for i in range(runs):
         print(f"\n=== Run {i + 1}/{runs} ===", flush=True)
-        result = run_once(python_path, timeout, hard_timeout, cp_sat_params)
+        result = run_once(
+            python_path,
+            timeout,
+            hard_timeout,
+            cp_sat_params,
+            dynamic_precedence,
+        )
         results.append(result)
         print(
             f"  success={result['success']}, returncode={result['returncode']}, "
@@ -285,6 +302,7 @@ def run_benchmark(
         "solver_timeout_seconds": timeout,
         "hard_timeout_seconds": hard_timeout,
         "cp_sat_params": cp_sat_params or {},
+        "dynamic_precedence": dynamic_precedence,
         "median_elapsed": round(median_elapsed, 2),
         "min_elapsed": round(sorted_elapsed[0], 2),
         "max_elapsed": round(sorted_elapsed[-1], 2),
@@ -320,6 +338,20 @@ if __name__ == "__main__":
         metavar="KEY=VALUE",
         help="Set a CP-SAT parameter on every SLOTHY CpSolver instance, e.g. use_dynamic_precedence_in_disjunctive=false.",
     )
+    dynamic_precedence = parser.add_mutually_exclusive_group()
+    dynamic_precedence.add_argument(
+        "--dynamic-precedence",
+        dest="dynamic_precedence",
+        action="store_true",
+        default=None,
+        help="Ask SLOTHY to force OR-Tools use_dynamic_precedence_in_disjunctive=true.",
+    )
+    dynamic_precedence.add_argument(
+        "--no-dynamic-precedence",
+        dest="dynamic_precedence",
+        action="store_false",
+        help="Ask SLOTHY to force OR-Tools use_dynamic_precedence_in_disjunctive=false.",
+    )
     args = parser.parse_args()
 
     summary = run_benchmark(
@@ -328,6 +360,7 @@ if __name__ == "__main__":
         args.timeout,
         args.hard_timeout,
         dict(args.cp_sat_param),
+        args.dynamic_precedence,
     )
 
     if args.out:

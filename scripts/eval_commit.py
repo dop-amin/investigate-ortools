@@ -50,6 +50,7 @@ def evaluate(args) -> dict:
                 "any_binary_search_limit": False,
                 "any_no_solution": False,
                 "cp_sat_params": cp_sat_params,
+                "dynamic_precedence": args.dynamic_precedence,
             }
             out_json.parent.mkdir(parents=True, exist_ok=True)
             out_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")
@@ -65,6 +66,7 @@ def evaluate(args) -> dict:
             args.timeout,
             args.hard_timeout,
             cp_sat_params=cp_sat_params,
+            dynamic_precedence=args.dynamic_precedence,
         )
         summary["commit"] = args.commit
         summary["build_error"] = None
@@ -87,6 +89,7 @@ def evaluate(args) -> dict:
             "any_binary_search_limit": False,
             "any_no_solution": False,
             "cp_sat_params": cp_sat_params,
+            "dynamic_precedence": args.dynamic_precedence,
         }
 
     out_json.parent.mkdir(parents=True, exist_ok=True)
@@ -141,6 +144,20 @@ def main() -> int:
         default=[],
         metavar="KEY=VALUE",
         help="Set a CP-SAT parameter on every SLOTHY CpSolver instance.",
+    )
+    dynamic_precedence = parser.add_mutually_exclusive_group()
+    dynamic_precedence.add_argument(
+        "--dynamic-precedence",
+        dest="dynamic_precedence",
+        action="store_true",
+        default=None,
+        help="Ask SLOTHY to force OR-Tools use_dynamic_precedence_in_disjunctive=true.",
+    )
+    dynamic_precedence.add_argument(
+        "--no-dynamic-precedence",
+        dest="dynamic_precedence",
+        action="store_false",
+        help="Ask SLOTHY to force OR-Tools use_dynamic_precedence_in_disjunctive=false.",
     )
     args = parser.parse_args()
 
